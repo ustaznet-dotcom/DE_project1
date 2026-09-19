@@ -2,7 +2,10 @@ version: '3.7'
 
 x-airflow-common:
   &airflow-common
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.9.2}
+  build:
+    context: .
+    dockerfile: Dockerfile.airflow
+  image: airflow-spark:2.9.2
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
@@ -14,12 +17,15 @@ x-airflow-common:
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
+    # Connection к Spark-кластеру (conn_id = spark_default), client mode
+    AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type": "spark", "host": "spark://spark-master", "port": 7077, "extra": {"deploy-mode": "client"}}'
+    PYSPARK_PYTHON: python3
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
+    - ${AIRFLOW_PROJ_DIR:-.}/jobs:/opt/jobs
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -56,18 +62,21 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
-
   clickhouse:
-    image: yandex/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse_user
     ports:
       - "8123:8123"
       - "9000:9000"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.2.0
     container_name: grafana
     ports:
       - "3000:3000"
@@ -78,8 +87,6 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     depends_on:
       - clickhouse
-    networks:
-      - default
 
   redis:
     image: redis:7.2-bookworm
@@ -92,6 +99,35 @@ services:
       retries: 50
       start_period: 30s
     restart: always
+
+  spark-master:
+    image: apache/spark:3.5.3-python3
+    container_name: spark-master
+    hostname: spark-master
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    ports:
+      - "8081:8080"   # Master UI
+      - "7077:7077"   # Master RPC
+    volumes:
+      - ./jobs:/opt/jobs
+    restart: unless-stopped
+
+  spark-worker:
+    image: apache/spark:3.5.3-python3
+    container_name: spark-worker
+    hostname: spark-worker
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    environment:
+      SPARK_WORKER_CORES: "2"
+      SPARK_WORKER_MEMORY: "2g"
+      PYSPARK_PYTHON: python3
+    ports:
+      - "8082:8081"   # Worker UI
+    volumes:
+      - ./jobs:/opt/jobs
+    depends_on:
+      - spark-master
+    restart: unless-stopped
 
   airflow-webserver:
     <<: *airflow-common
@@ -127,6 +163,7 @@ services:
 
   airflow-worker:
     <<: *airflow-common
+    hostname: airflow-worker   # нужен, чтобы Spark executors могли достучаться до driver
     command: celery worker
     healthcheck:
       test:
@@ -208,7 +245,7 @@ services:
           echo "   https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html#before-you-begin"
           echo
         fi
-        mkdir -p /sources/logs /sources/dags /sources/plugins
+        mkdir -p /sources/logs /sources/dags /sources/plugins /sources/jobs
         chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
         exec /entrypoint airflow version
     environment:
@@ -217,7 +254,6 @@ services:
       _AIRFLOW_WWW_USER_CREATE: 'true'
       _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
       _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
-      _PIP_ADDITIONAL_REQUIREMENTS: ''
     user: "0:0"
     volumes:
       - ${AIRFLOW_PROJ_DIR:-.}:/sources
