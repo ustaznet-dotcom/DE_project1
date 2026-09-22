@@ -18,7 +18,8 @@ ENV PATH="/opt/spark/bin:${PATH}"
 USER airflow
 RUN pip install --no-cache-dir \
     apache-airflow-providers-apache-spark \
-    pyspark==3.5.3
+    pyspark==3.5.3 \
+    clickhouse-connect==0.7.19
 
 # Проверка (docker run --rm <image> python3 --version) — версия Python
 # на driver (Airflow) и на executors (Spark worker) должна совпадать по minor.

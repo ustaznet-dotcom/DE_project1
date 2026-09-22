@@ -81,12 +81,26 @@ df_typed.select(
     F.max("square").alias("square_max"),
     F.sum(F.col("square").isNull().cast("int")).alias("square_null"),
 ).show(truncate=False)
+# null in columns
+df_typed.select(
+    F.sum(F.col("house_id").isNull().cast("int")).alias("house_id_null"),
+    F.sum(F.col("region").isNull().cast("int")).alias("region_null"),
+    F.sum(F.col("locality_name").isNull().cast("int")).alias("locality_name_null"),
+    F.sum(F.col("address").isNull().cast("int")).alias("address_null"),
+).show(truncate=False)
+
+# data types
+
 
 df_years = df_typed.filter(
     F.col("maintenance_year").between(YEAR_MIN, YEAR_MAX)
 )
 print(f"Строк с годом в [{YEAR_MIN}, {YEAR_MAX}]: {df_years.count()}")
+print("down")
+df_typed.select(F.countDistinct("locality_name").alias("n_localities")).show()
 
+print("down2")
+print(df_typed.filter(~F.col("maintenance_year").between(1700, 2026)).count())
 # ---------------------------------------------------------------
 # 4. Средний и медианный год (медиана точная)
 # ---------------------------------------------------------------
