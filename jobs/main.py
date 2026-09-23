@@ -1,6 +1,7 @@
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
+import clickhouse_connect
 
 FILE_PATH = "/opt/jobs/russian_houses.csv"
 
@@ -40,7 +41,7 @@ df_raw.printSchema()
 # 2. Проверка корректности чтения
 # ---------------------------------------------------------------
 print("\n--- 2. Проверка данных ---")
-df = df_raw.dropna(how="all")
+df = df_raw.dropna(how="all").cache()
 print(f"Строк после удаления полностью пустых: {df.count()}")
 print(f"Строк с пустым house_id: {df.filter(F.col('house_id').isNull()).count()}")
 print(f"Уникальных house_id: {df.select('house_id').distinct().count()}")
@@ -150,5 +151,20 @@ print("\n--- 7. Здания по десятилетиям ---")
     .groupBy("decade").count()
     .orderBy("decade")
     .show(100, truncate=False))
+pandas_df = df_typed.select("house_id", "address", "region", "locality_name", "maintenance_year", "square").toPandas()
+client = clickhouse_connect.get_client(host="clickhouse", port=8123, username="dwh_user", password="dwh_password")
+client.command("TRUNCATE TABLE default.buildings")
+client.insert_df(table="buildings", df=pandas_df)
+top_25_square_hom = client.query("""
+SELECT
+    address,
+    square
+FROM buildings
+WHERE (square > 60) AND (square < 1000000)
+ORDER BY square DESC
+LIMIT 25
+""")
+for row in top_25_square_hom.result_rows:
+    print(row)
 
 spark.stop()
