@@ -1,4 +1,4 @@
 jobs/russian_houses.csv
 *.zip
 .env
-logs/
+logs/__pycache__/
